@@ -1,0 +1,563 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Minimal ECS Fargate + RDS PostgreSQL stack for practice-logger
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.0.0/24
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 10.0.10.0/24
+  PrivateSubnet2Cidr:
+    Type: String
+    Default: 10.0.11.0/24
+  DbName:
+    Type: String
+    Default: PracticeLoggerDb
+  DbUsername:
+    Type: String
+    Default: sa
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
+  DbInstanceClass:
+    Type: String
+    Default: db.t3.micro
+  FrontendImageTag:
+    Type: String
+    Default: latest
+  FrontendContainerPort:
+    Type: Number
+    Default: 5173
+  FrontendDesiredCount:
+    Type: Number
+    Default: 0
+  FrontendCpu:
+    Type: String
+    Default: '256'
+  FrontendMemory:
+    Type: String
+    Default: '512'
+  ApiLambdaS3Bucket:
+    Type: String
+  ApiLambdaS3Key:
+    Type: String
+  ApiLambdaS3ObjectVersion:
+    Type: String
+    Default: ''
+  ApiLambdaHandler:
+    Type: String
+  ApiLambdaRuntime:
+    Type: String
+    Default: dotnet8
+  ApiLambdaMemory:
+    Type: Number
+    Default: 512
+  ApiLambdaTimeout:
+    Type: Number
+    Default: 30
+
+Conditions:
+  UseApiLambdaObjectVersion: !Not [!Equals [!Ref ApiLambdaS3ObjectVersion, ""]]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnet1Cidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnet2Cidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PrivateSubnet1Cidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PrivateSubnet2Cidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  FrontendAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP to frontend ALB
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  FrontendServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow ALB to reach frontend service
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref FrontendContainerPort
+          ToPort: !Ref FrontendContainerPort
+          SourceSecurityGroupId: !Ref FrontendAlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ApiLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Lambda to reach database
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ApiVpcEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow frontend service to reach private API Gateway
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref FrontendServiceSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow API Lambda to reach database
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ApiLambdaSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  FrontendRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${AWS::StackName}-frontend
+
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${AWS::StackName}/frontend
+      RetentionInDays: 14
+
+  EcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ecs-task-execution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource:
+                  - !GetAtt FrontendRepository.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${AWS::StackName}/frontend:*
+
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${AWS::StackName}-frontend
+      Cpu: !Ref FrontendCpu
+      Memory: !Ref FrontendMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Sub ${FrontendRepository.RepositoryUri}:${FrontendImageTag}
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref FrontendContainerPort
+              Protocol: tcp
+          Environment:
+            - Name: VITE_API_URL
+              Value: !Sub https://${ApiRestApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStage}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref FrontendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  FrontendAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref FrontendAlbSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      TargetType: ip
+      Port: !Ref FrontendContainerPort
+      Protocol: HTTP
+      VpcId: !Ref Vpc
+      HealthCheckPath: /
+
+  FrontendListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref FrontendAlb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  FrontendService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - FrontendListener
+    Properties:
+      Cluster: !Ref EcsCluster
+      DesiredCount: !Ref FrontendDesiredCount
+      LaunchType: FARGATE
+      TaskDefinition: !Ref FrontendTaskDefinition
+      HealthCheckGracePeriodSeconds: 60
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref FrontendServiceSecurityGroup
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: !Ref FrontendContainerPort
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  ApiLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-api
+      RetentionInDays: 14
+
+  ApiLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: api-secrets-read
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DbSecret
+
+  ApiLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-api
+      Role: !GetAtt ApiLambdaExecutionRole.Arn
+      Runtime: !Ref ApiLambdaRuntime
+      Handler: !Ref ApiLambdaHandler
+      Code:
+        S3Bucket: !Ref ApiLambdaS3Bucket
+        S3Key: !Ref ApiLambdaS3Key
+        S3ObjectVersion: !If
+          - UseApiLambdaObjectVersion
+          - !Ref ApiLambdaS3ObjectVersion
+          - !Ref AWS::NoValue
+      MemorySize: !Ref ApiLambdaMemory
+      Timeout: !Ref ApiLambdaTimeout
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref ApiLambdaSecurityGroup
+      Environment:
+        Variables:
+          ConnectionStrings__PracticeLoggerDb: !Sub |
+            Host=${DbInstance.Endpoint.Address};Port=5432;Database=${DbName};Username=${DbUsername};Password={{resolve:secretsmanager:${DbSecret}:SecretString:password}}
+
+  ApiVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.execute-api
+      VpcEndpointType: Interface
+      VpcId: !Ref Vpc
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref ApiVpcEndpointSecurityGroup
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/*/*
+
+  ApiRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub ${AWS::StackName}-api
+      EndpointConfiguration:
+        Types:
+          - PRIVATE
+        VpcEndpointIds:
+          - !Ref ApiVpcEndpoint
+      Policy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiRestApi}/*/*/*
+            Condition:
+              StringEquals:
+                aws:SourceVpce: !Ref ApiVpcEndpoint
+
+  ApiProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiRestApi
+      ParentId: !GetAtt ApiRestApi.RootResourceId
+      PathPart: '{proxy+}'
+
+  ApiProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiRestApi
+      ResourceId: !Ref ApiProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}/invocations
+
+  ApiRootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiRestApi
+      ResourceId: !GetAtt ApiRestApi.RootResourceId
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}/invocations
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiProxyMethod
+      - ApiRootMethod
+    Properties:
+      RestApiId: !Ref ApiRestApi
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref ApiRestApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: prod
+
+  ApiLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiRestApi}/*/*/*
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for RDS
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  DbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${AWS::StackName}/db
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${DbUsername}"}'
+        GenerateStringKey: password
+        ExcludePunctuation: true
+
+  DbInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: postgres
+      DBName: !Ref DbName
+      AllocatedStorage: !Ref DbAllocatedStorage
+      DBInstanceClass: !Ref DbInstanceClass
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DbSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DbSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroup
+      StorageEncrypted: true
+      PubliclyAccessible: false
+
+Outputs:
+  FrontendAlbDnsName:
+    Description: Public frontend ALB DNS name
+    Value: !GetAtt FrontendAlb.DNSName
+  ApiRestApiId:
+    Description: Private API Gateway RestApi ID
+    Value: !Ref ApiRestApi
+  ApiRestApiEndpoint:
+    Description: Private API Gateway base URL (requires VPC access)
+    Value: !Sub https://${ApiRestApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStage}
+  DbEndpoint:
+    Description: RDS instance endpoint
+    Value: !GetAtt DbInstance.Endpoint.Address
+  FrontendRepositoryUri:
+    Value: !GetAtt FrontendRepository.RepositoryUri
