@@ -3,6 +3,7 @@ using Amazon.CDK.AWS.EC2;
 using Amazon.CDK.AWS.ECR;
 using Amazon.CDK.AWS.ECS;
 using Amazon.CDK.AWS.ECS.Patterns;
+using Amazon.CDK.AWS.SSM;
 using Constructs;
 using System.Collections.Generic;
 
@@ -28,6 +29,11 @@ namespace PracticeLoggerInfrastructure
             });
 
             // 2. Create Fargate Service using image from ECR
+            var sessionSecret = StringParameter.FromSecureStringParameterAttributes(this, "UiSessionSecret", new SecureStringParameterAttributes
+            {
+                ParameterName = "/practice-logger/ui/session-secret"
+            });
+
             var service = new ApplicationLoadBalancedFargateService(this, "UiService", new ApplicationLoadBalancedFargateServiceProps
             {
                 Vpc = props.Vpc,
@@ -42,6 +48,10 @@ namespace PracticeLoggerInfrastructure
                         { "VITE_API_URL", props.ApiEndpoint },
                         { "HOST", "0.0.0.0" },
                         { "PORT", "3000" }
+                    },
+                    Secrets = new Dictionary<string, Secret>
+                    {
+                        { "SESSION_SECRET", Secret.FromSsmParameter(sessionSecret) }
                     }
                 }
             });
