@@ -31,15 +31,17 @@ namespace PracticeLoggerInfrastructure
             var service = new ApplicationLoadBalancedFargateService(this, "UiService", new ApplicationLoadBalancedFargateServiceProps
             {
                 Vpc = props.Vpc,
+                AssignPublicIp = true,
+                TaskSubnets = new SubnetSelection { SubnetType = SubnetType.PUBLIC },
                 TaskImageOptions = new ApplicationLoadBalancedTaskImageOptions
                 {
-                    // Use the 'latest' tag from the ECR repo. 
-                    // The UI pipeline will push to this repo.
-                    Image = ContainerImage.FromEcrRepository(repository, "latest"), 
+                    Image = ContainerImage.FromEcrRepository(repository, "latest"),
                     ContainerPort = 3000,
                     Environment = new Dictionary<string, string>
                     {
-                        { "VITE_API_URL", props.ApiEndpoint }
+                        { "VITE_API_URL", props.ApiEndpoint },
+                        { "HOST", "0.0.0.0" },
+                        { "PORT", "3000" }
                     }
                 }
             });

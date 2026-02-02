@@ -9,46 +9,20 @@ using Constructs;
 
 namespace PracticeLoggerInfrastructure
 {
+    public class ApiStackProps : StackProps
+    {
+        public IVpc Vpc { get; set; }
+    }
+
     public class ApiStack : Stack
     {
         public readonly string ApiEndpoint;
         public readonly IVpc Vpc;
 
-        internal ApiStack(Construct scope, string id, IStackProps props = null)
+        internal ApiStack(Construct scope, string id, ApiStackProps props)
             : base(scope, id, props)
         {
-            this.Vpc = new Vpc(
-                this,
-                "ApiVpc",
-                new VpcProps
-                {
-                    MaxAzs = 2,
-                    NatGateways = 0,
-                    SubnetConfiguration = new[]
-                    {
-                        new SubnetConfiguration
-                        {
-                            Name = "Public",
-                            SubnetType = SubnetType.PUBLIC,
-                            CidrMask = 24,
-                        },
-                        new SubnetConfiguration
-                        {
-                            Name = "Private",
-                            SubnetType = SubnetType.PRIVATE_ISOLATED,
-                            CidrMask = 24,
-                        },
-                    },
-                }
-            );
-
-            this.Vpc.AddInterfaceEndpoint(
-                "SecretsManagerEndpoint",
-                new InterfaceVpcEndpointOptions
-                {
-                    Service = InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
-                }
-            );
+            this.Vpc = props.Vpc;
 
             var dbInstance = new DatabaseInstance(
                 this,
@@ -82,6 +56,7 @@ namespace PracticeLoggerInfrastructure
                     Handler = "PracticeLogger.Api",
                     // Placeholder code. The API pipeline will update this with the real .NET binaries.
                     Code = Code.FromAsset("lambda-placeholder"), 
+                    Timeout = Duration.Seconds(30),
                     Vpc = this.Vpc,
                     VpcSubnets = new SubnetSelection { SubnetType = SubnetType.PRIVATE_ISOLATED },
                     Environment = new Dictionary<string, string>
@@ -103,6 +78,16 @@ namespace PracticeLoggerInfrastructure
             );
 
             this.ApiEndpoint = httpApi.ApiEndpoint;
+
+            new CfnOutput(
+                this,
+                "ApiEndpoint",
+                new CfnOutputProps
+                {
+                    Value = httpApi.ApiEndpoint,
+                    Description = "HTTP API endpoint for the Practice Logger API",
+                }
+            );
 
             new CfnOutput(
                 this,

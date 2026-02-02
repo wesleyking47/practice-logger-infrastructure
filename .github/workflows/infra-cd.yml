@@ -1,0 +1,59 @@
+name: Infra CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-2
+  CDK_VERSION: "2"
+
+jobs:
+  deploy:
+    name: Deploy (main/manual)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk@${{ env.CDK_VERSION }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build
+        run: dotnet build src
+
+      - name: CDK synth
+        run: cdk synth --all
+
+      - name: CDK deploy (all stacks)
+        run: cdk deploy --all --require-approval=never
+
+      - name: Stack status check
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name NetworkStack \
+            --query "Stacks[0].StackStatus"
+          aws cloudformation describe-stacks \
+            --stack-name ApiStack \
+            --query "Stacks[0].StackStatus"
+          aws cloudformation describe-stacks \
+            --stack-name UiStack \
+            --query "Stacks[0].StackStatus"

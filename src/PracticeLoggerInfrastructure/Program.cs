@@ -15,12 +15,17 @@ namespace PracticeLoggerInfrastructure
                 Account = "231877834621",
                 Region = "us-east-2",
             };
-            var apiStack = new ApiStack(app, "ApiStack", new StackProps { Env = sharedEnv });
+            var networkStack = new NetworkStack(app, "NetworkStack", new StackProps { Env = sharedEnv });
+            var apiStack = new ApiStack(app, "ApiStack", new ApiStackProps
+            {
+                Env = sharedEnv,
+                Vpc = networkStack.Vpc
+            });
             new UiStack(app, "UiStack", new UiStackProps 
             { 
                 Env = sharedEnv,
                 ApiEndpoint = apiStack.ApiEndpoint,
-                Vpc = apiStack.Vpc
+                Vpc = networkStack.Vpc
             });
             app.Synth();
         }
