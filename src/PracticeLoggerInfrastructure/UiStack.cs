@@ -46,6 +46,12 @@ namespace PracticeLoggerInfrastructure
                 }
             });
 
+            service.TargetGroup.ConfigureHealthCheck(new Amazon.CDK.AWS.ElasticLoadBalancingV2.HealthCheck
+            {
+                Path = "/login",
+                HealthyHttpCodes = "200"
+            });
+
             // 3. Outputs for CI/CD pipelines
             new CfnOutput(this, "UiRepositoryUri", new CfnOutputProps 
             { 
