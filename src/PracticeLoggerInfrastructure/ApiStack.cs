@@ -57,6 +57,7 @@ namespace PracticeLoggerInfrastructure
                     // Placeholder code. The API pipeline will update this with the real .NET binaries.
                     Code = Code.FromAsset("lambda-placeholder"), 
                     Timeout = Duration.Seconds(30),
+                    MemorySize = 512,
                     Vpc = this.Vpc,
                     VpcSubnets = new SubnetSelection { SubnetType = SubnetType.PRIVATE_ISOLATED },
                     Environment = new Dictionary<string, string>

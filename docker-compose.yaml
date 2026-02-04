@@ -19,7 +19,7 @@ services:
     environment:
       - ASPNETCORE_URLS=http://+:5270
       - RUN_MIGRATIONS=true
-      - ConnectionStrings__PracticeLoggerDb=Host=localhost;Port=5433;Database=PracticeLoggerDb;Username=sa;Password=Password123!
+      - ConnectionStrings__PracticeLoggerDb=Host=localhost;Port=5432;Database=PracticeLoggerDb;Username=sa;Password=Password123!
     depends_on:
       db:
         condition: service_healthy
@@ -32,7 +32,6 @@ services:
   db:
     image: postgres:18
     network_mode: host
-    command: -p 5433
     environment:
       - POSTGRES_DB=PracticeLoggerDb
       - POSTGRES_USER=sa
@@ -40,7 +39,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sa -d PracticeLoggerDb -p 5433"]
+      test: ["CMD-SHELL", "pg_isready -U sa -d PracticeLoggerDb -p 5432"]
       interval: 10s
       timeout: 5s
       retries: 5
